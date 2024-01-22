@@ -1,0 +1,119 @@
+name: Build and test asset
+
+on:
+  schedule:
+    - cron: '0 10 * * 1'
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: 'Node.js version'
+        required: true
+        default: '[ "lts/*", "18" ]'
+  pull_request:
+    branches: [ master ]
+  push:
+    branches: [ master ]
+    tags: [ '*' ]
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-latest, ubuntu-latest ]
+        version: ${{ fromJSON(inputs.versions || '[ "lts/*", "18" ]') }}
+    env:
+      NODEJS_VERSION: ${{ matrix.version }}
+      NEXE_ASSET: ${{ github.workspace }}/nexe-asset
+      NEXE_TMP_CACHE_PATH: ${{ github.workspace }}/nexe-tmp
+      NEXE_TMP: ${{ github.workspace }}/nexe-tmp/standard
+      CCACHE_COMPRESS: '1'
+      ErrorView: NormalView
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-node@v2
+        with:
+          node-version: '${{ env.NODEJS_VERSION }}'
+      - name: Record Node version
+        run: |
+          echo "NODEJS_VERSION=$(node -p process.versions.node)" >> $env:GITHUB_ENV
+          echo "NODEJS_VERSION=$(node -p process.versions.node)" >> "${GITHUB_ENV}"
+      - run: npm ci
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+      - if: ${{ matrix.os == 'windows-latest' }}
+        run: choco install nasm
+      - if: ${{ matrix.os == 'ubuntu-latest' }}
+        run: sudo apt-get update
+      - if: ${{ matrix.os != 'windows-latest' }}
+        uses: hendrikmuhs/ccache-action@faf867a11c028c0b483fb2ae72b6fc8f7d842714
+        with:
+          create-symlink: true
+          key: ${{ github.job }}-${{ matrix.os }}-${{ matrix.version }}
+      - if: ${{ matrix.os == 'windows-latest' }}
+        run: |
+          echo "NEXE_ASSET=${{ env.NEXE_ASSET }}.exe" >> $env:GITHUB_ENV
+          echo "EXECUTABLE_SUFFIX=.exe" >> $env:GITHUB_ENV
+      - name: Build and test asset
+        run: node tasks/asset-build && node tasks/asset-test-build && npm run test:integration:run
+      - name: Update release artefact name
+        shell: bash
+        run: |
+          nexe_target="$(node -p 'require("./lib/target").getTarget().toString()')"
+          echo "NEXE_TARGET=${nexe_target}" >> "${GITHUB_ENV}"
+          artefact_name="nexe-asset-${nexe_target}${EXECUTABLE_SUFFIX}"
+          mv "${NEXE_ASSET}" "${artefact_name}"
+          echo "NEXE_ASSET=${artefact_name}" >> "${GITHUB_ENV}"
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NEXE_ASSET }}
+          path: ${{ env.NEXE_ASSET }}
+          if-no-files-found: error
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-${{ env.NEXE_TARGET }}${{ env.EXECUTABLE_SUFFIX }}
+          path: integration-tests${{ env.EXECUTABLE_SUFFIX }}
+          if-no-files-found: error
+      - if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        with:
+          fail_on_unmatched_files: true
+          prerelease: true
+          files: ${{ env.NEXE_ASSET }}
+      - if: ${{ matrix.os == 'ubuntu-latest' }}
+        name: musl static build
+        run: |
+          nexe_target="$(node -p 'require("./lib/target").getTarget({ platform: "static" }).toString()')"
+          echo "NEXE_TARGET=${nexe_target}" >> "${GITHUB_ENV}"
+          artefact_name="nexe-asset-${nexe_target}"
+          export NEXE_ASSET="${artefact_name}"
+          echo "NEXE_ASSET=${NEXE_ASSET}" >> "${GITHUB_ENV}"
+          export MUSL_BUILD=yes NEXE_TMP=${{ env.NEXE_TMP_CACHE_PATH }}/musl
+          eval $(npx -p node-musl musl-exports)
+          export CC="ccache ${CC}" CXX="ccache ${CXX}" LD="ccache ${LD}"
+          node tasks/asset-build
+          node tasks/asset-test-build
+          npm run test:integration:run
+      - if: ${{ matrix.os == 'ubuntu-latest' }}
+        name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.NEXE_ASSET }}
+          path: ${{ env.NEXE_ASSET }}
+          if-no-files-found: error
+      - if: ${{ matrix.os == 'ubuntu-latest' }}
+        name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-tests-${{ env.NEXE_TARGET }}${{ env.EXECUTABLE_SUFFIX }}
+          path: integration-tests
+          if-no-files-found: error
+      - if: ${{ startsWith(github.ref, 'refs/tags/') && matrix.os == 'ubuntu-latest' }}
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844
+        with:
+          fail_on_unmatched_files: true
+          prerelease: true
+          files: ${{ env.NEXE_ASSET }}
