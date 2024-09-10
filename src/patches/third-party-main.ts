@@ -55,7 +55,7 @@ export default async function main(compiler: NexeCompiler, next: () => Promise<v
   })
 
   const fileLines = file.contents.toString().split('\n')
-  if (semverGt(version, '19.99')) {
+  if (semverGt(version, '18.16.99')) {
     await compiler.replaceInFileAsync(
       'lib/internal/modules/cjs/loader.js',
       "'use strict';",

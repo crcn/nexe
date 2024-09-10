@@ -79,6 +79,7 @@ function shimFs(binary: NexeHeader, fs: typeof import('fs') = require('fs')) {
   }
   let returningArray: boolean
   patches.internalModuleReadJSON = function (this: any, original: any, ...args: any[]) {
+    log(`internalModuleReadJSON ${args[0]}`)
     if (returningArray == null) returningArray = Array.isArray(original.call(this, ''))
     const res = internalModuleReadFile.call(this, original, ...args)
     return returningArray && !Array.isArray(res)
